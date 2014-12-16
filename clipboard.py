@@ -1,22 +1,15 @@
 import contextlib
 import ctypes
 from ctypes import wintypes
-import operator
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
 # Types
-BOOL = ctypes.c_uint32
-HWND = ctypes.c_uint32
 NULL = 0
 
 GMEM_MOVEABLE = 0x0002
 CF_TEXT = 1
-
-
-class ClipboardError(Exception):
-    pass
 
 
 def bool_errcheck(result, func, args):
@@ -107,13 +100,13 @@ SetClipboardData = wrap_function(name="SetClipboardData",
                                  ],
                                  errcheck=null_errcheck)
 
-GetClipboardData_ = wrap_function(name="GetClipboardData",
-                                  library=user32,
-                                  restype=wintypes.HGLOBAL,
-                                  params=[
-                                      Parameter("uFormat", wintypes.UINT, default=CF_TEXT)
-                                  ],
-                                  errcheck=null_errcheck)
+GetClipboardData = wrap_function(name="GetClipboardData",
+                                 library=user32,
+                                 restype=wintypes.HGLOBAL,
+                                 params=[
+                                     Parameter("uFormat", wintypes.UINT, default=CF_TEXT)
+                                 ],
+                                 errcheck=null_errcheck)
 
 
 def globallock_errcheck(result, func, args):
@@ -156,9 +149,6 @@ GlobalFree = wrap_function(name="GlobalFree",
                            errcheck=errcheck_expect_null)
 
 
-# TODO: add a context manager that also allocates and frees the global memory.
-
-
 @contextlib.contextmanager
 def clipboard(hWndNewOwner=NULL):
     try:
@@ -169,10 +159,12 @@ def clipboard(hWndNewOwner=NULL):
 
 
 @contextlib.contextmanager
-def global_memory(hGlobalMemory):
-    memory = GlobalLock(hGlobalMemory)
+def get_global_memory(handle):
+    memory = GlobalLock(handle)
+
     yield memory
-    GlobalUnlock(hGlobalMemory)
+
+    GlobalUnlock(handle)
 
 
 @contextlib.contextmanager
@@ -188,13 +180,13 @@ def global_alloc(flags, size):
 def global_copy(data):
     c_data = ctypes.create_string_buffer(data)
     with global_alloc(GMEM_MOVEABLE, ctypes.sizeof(c_data)) as handle:
-        with global_memory(handle) as memory:
+        with get_global_memory(handle) as memory:
             ctypes.memmove(memory, c_data, ctypes.sizeof(c_data))
 
         yield handle
 
 
-def Copy(text):
+def copy(text):
     with clipboard():
         EmptyClipboard()
         # Assuming we are handling ascii
@@ -202,33 +194,14 @@ def Copy(text):
             SetClipboardData(CF_TEXT, handle)
 
 
-def GetClipboardData(format_=CF_TEXT):
-    hglb = GetClipboardData_(format_)
-    return GlobalMemoryHandle(hglb)
-
-
-class GlobalMemoryHandle(object):
-    def __init__(self, handle):
-        self._handle = handle
-
-    @property
-    def handle(self):
-        return self._handle
-
-    def __enter__(self):
-        return GlobalLock(self._handle)
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        GlobalUnlock(self._handle)
-
-
-def Paste():
+def paste():
     with clipboard():
-        with GetClipboardData(CF_TEXT) as memory:
+        handle = GetClipboardData(CF_TEXT)
+        with get_global_memory(handle) as memory:
             return memory.value
 
 
 if __name__ == '__main__':
-    print Paste()
-    Copy(Paste() + b"what is this?")
-    print Paste()
+    print paste()
+    copy(paste() + b"what is this?")
+    print paste()
