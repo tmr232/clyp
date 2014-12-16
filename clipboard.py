@@ -18,15 +18,75 @@ class ClipboardError(Exception):
     pass
 
 
-prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND)
-paramflags = ((1, "hWndNewOwner"), )
-OpenClipboard = prototype(("OpenClipboard", user32), paramflags)
 def bool_errcheck(result, func, args):
     if not result:
         raise ctypes.WinError()
     return args
+
+
+def null_errcheck(result, func, args):
+    if not result:
+        raise ctypes.WinError()
+    return args
+
+def errcheck_expect_null(result, func, args):
+    if result:
+        raise ctypes.WinError()
+    return args
+
+
+def lasterror_errcheck(result, func, args):
+    if ctypes.get_last_error():
+        raise ctypes.WinError()
+
+
+prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND)
+paramflags = ((1, "hWndNewOwner"), )
+OpenClipboard = prototype(("OpenClipboard", user32), paramflags)
 OpenClipboard.errcheck = bool_errcheck
 
+prototype = ctypes.WINFUNCTYPE(wintypes.BOOL)
+CloseClipboard = prototype(("CloseClipboard", user32))
+CloseClipboard.errcheck = bool_errcheck
+
+prototype = ctypes.WINFUNCTYPE(wintypes.BOOL)
+EmptyClipboard = prototype(("EmptyClipboard", user32))
+
+prototype = ctypes.WINFUNCTYPE(wintypes.HANDLE, wintypes.UINT, wintypes.HANDLE)
+paramflags = (1, "uFormat"), (1, "hMem")
+SetClipboardData = prototype(("SetClipboardData", user32), paramflags)
+SetClipboardData.errcheck = null_errcheck
+
+prototype = ctypes.WINFUNCTYPE(wintypes.LPVOID, wintypes.HGLOBAL)
+paramflags = ((1, "hMem"), )
+GlobalLock = prototype(("GlobalLock", kernel32), paramflags)
+def errcheck(result, func, args):
+    if not result:
+        raise ctypes.WinError()
+    return ctypes.c_char_p(result)
+GlobalLock.errcheck = errcheck
+
+prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HGLOBAL)
+paramflags = ((1, "hMem"), )
+GlobalUnlock = prototype(("GlobalUnlock", kernel32), paramflags)
+GlobalUnlock.errcheck = lasterror_errcheck
+
+prototype = ctypes.WINFUNCTYPE(wintypes.HGLOBAL, wintypes.UINT, wintypes.UINT)
+paramflags = (1, "uFlags", GMEM_MOVEABLE), (1, "dwBytes")
+GlobalAlloc = prototype(("GlobalAlloc", kernel32), paramflags)
+GlobalAlloc.errcheck = null_errcheck
+
+prototype = ctypes.WINFUNCTYPE(wintypes.HGLOBAL, wintypes.HGLOBAL)
+paramflags = ((1, "hMem"), )
+GlobalFree = prototype(("GlobalFree", kernel32), paramflags)
+GlobalFree.errcheck = errcheck_expect_null
+
+
+prototype = ctypes.WINFUNCTYPE(wintypes.HGLOBAL, wintypes.UINT)
+paramflags = ((1, "uFormat", CF_TEXT), )
+GetClipboardData_ = prototype(("GetClipboardData", user32), paramflags)
+GetClipboardData_.errcheck = null_errcheck
+# TODO: add a context manager that also allocates and frees the global memory.
 
 
 @contextlib.contextmanager
@@ -38,51 +98,20 @@ def clipboard(hWndNewOwner=NULL):
         CloseClipboard()
 
 
-def CloseClipboard():
-    success = user32.CloseClipboard()
-    if not success:
-        raise ClipboardError("Cannot close clipboard")
-
-
-def EmptyClipboard():
-    return user32.EmptyClipboard()
-
-
-def global_lock(memory_handle):
-    memory = kernel32.GlobalLock(memory_handle)
-    if not memory:
-        raise MemoryError("Failed locking global memory")
-    return ctypes.c_char_p(memory)
-
-
-def global_unlock(hGlobalMemory):
-    is_locked = kernel32.GlobalUnlock(hGlobalMemory)
-    # No need to check return value??
-    # if is_locked:
-    # raise MemoryError("memory is still locked.")
-
-
-# TODO: add a context manager that also allocates and frees the global memory.
-
-
-
 @contextlib.contextmanager
 def global_memory(hGlobalMemory):
-    memory = global_lock(hGlobalMemory)
+    memory = GlobalLock(hGlobalMemory)
     yield memory
-    global_unlock(hGlobalMemory)
+    GlobalUnlock(hGlobalMemory)
 
 
 @contextlib.contextmanager
 def global_alloc(flags, size):
-    handle = kernel32.GlobalAlloc(flags, size)
-    if not handle:
-        # TODO: use GetLastError() here.
-        raise MemoryError("Allocation failed.")
+    handle = GlobalAlloc(flags, size)
 
     yield handle
 
-    kernel32.GlobalFree(handle)
+    GlobalFree(handle)
 
 
 @contextlib.contextmanager
@@ -100,13 +129,11 @@ def Copy(text):
         EmptyClipboard()
         # Assuming we are handling ascii
         with global_copy(text) as handle:
-            user32.SetClipboardData(CF_TEXT, handle)
+            SetClipboardData(CF_TEXT, handle)
 
 
 def GetClipboardData(format_=CF_TEXT):
-    hglb = user32.GetClipboardData(format_)
-    if not hglb:
-        raise ClipboardError("Cannot get data.")
+    hglb = GetClipboardData_(format_)
     return GlobalMemoryHandle(hglb)
 
 
@@ -119,10 +146,10 @@ class GlobalMemoryHandle(object):
         return self._handle
 
     def __enter__(self):
-        return global_lock(self._handle)
+        return GlobalLock(self._handle)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        global_unlock(self._handle)
+        GlobalUnlock(self._handle)
 
 
 def Paste():
