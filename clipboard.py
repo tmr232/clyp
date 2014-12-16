@@ -50,8 +50,9 @@ def global_lock(memory_handle):
 
 def global_unlock(hGlobalMemory):
     is_locked = kernel32.GlobalUnlock(hGlobalMemory)
-    if is_locked:
-        raise MemoryError("memory is still locked.")
+    # No need to check return value??
+    # if is_locked:
+    #     raise MemoryError("memory is still locked.")
 
 
 @contextlib.contextmanager
@@ -76,6 +77,22 @@ def Copy(text):
 
         user32.SetClipboardData(CF_TEXT, memory_handle)
 
+        kernel32.GlobalFree(memory_handle)
+
+
+def GetClipboardData():
+    hglb = user32.GetClipboardData(CF_TEXT)
+    if not hglb:
+        raise ClipboardError("Cannot get data.")
+    return hglb
+
+def Paste():
+    with clipboard():
+        hglb = GetClipboardData()
+        with global_memory(hglb) as memory:
+            return memory.value
 
 if __name__ == '__main__':
+    print Paste()
     Copy("what is this?")
+    print Paste()
