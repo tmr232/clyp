@@ -1,5 +1,6 @@
 import contextlib
 import ctypes
+from ctypes import wintypes
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -17,11 +18,15 @@ class ClipboardError(Exception):
     pass
 
 
-def OpenClipboard(hWndNewOwner=NULL):
-    hWndNewOwner = HWND(hWndNewOwner)
-    success = user32.OpenClipboard(hWndNewOwner)
-    if not success:
-        raise ClipboardError("Cannot Open Clipboard")
+prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND)
+paramflags = ((1, "hWndNewOwner"), )
+OpenClipboard = prototype(("OpenClipboard", user32), paramflags)
+def bool_errcheck(result, func, args):
+    if not result:
+        raise ctypes.WinError()
+    return args
+OpenClipboard.errcheck = bool_errcheck
+
 
 
 @contextlib.contextmanager
@@ -75,7 +80,7 @@ def global_alloc(flags, size):
         # TODO: use GetLastError() here.
         raise MemoryError("Allocation failed.")
 
-    yield GlobalMemoryHandle(handle)
+    yield handle
 
     kernel32.GlobalFree(handle)
 
