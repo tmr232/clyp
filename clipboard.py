@@ -32,10 +32,12 @@ def clipboard(hWndNewOwner=NULL):
     finally:
         CloseClipboard()
 
+
 def CloseClipboard():
     success = user32.CloseClipboard()
     if not success:
         raise ClipboardError("Cannot close clipboard")
+
 
 def EmptyClipboard():
     return user32.EmptyClipboard()
@@ -52,7 +54,11 @@ def global_unlock(hGlobalMemory):
     is_locked = kernel32.GlobalUnlock(hGlobalMemory)
     # No need to check return value??
     # if is_locked:
-    #     raise MemoryError("memory is still locked.")
+    # raise MemoryError("memory is still locked.")
+
+
+# TODO: add a context manager that also allocates and frees the global memory.
+
 
 
 @contextlib.contextmanager
@@ -62,22 +68,34 @@ def global_memory(hGlobalMemory):
     global_unlock(hGlobalMemory)
 
 
+@contextlib.contextmanager
+def global_alloc(flags, size):
+    handle = kernel32.GlobalAlloc(flags, size)
+    if not handle:
+        # TODO: use GetLastError() here.
+        raise MemoryError("Allocation failed.")
+
+    yield handle
+
+    kernel32.GlobalFree(handle)
+
+
+@contextlib.contextmanager
+def global_copy(data):
+    c_data = ctypes.create_string_buffer(data)
+    with global_alloc(GMEM_MOVEABLE, ctypes.sizeof(c_data)) as handle:
+        with global_memory(handle) as memory:
+            ctypes.memmove(memory, c_data, ctypes.sizeof(c_data))
+
+        yield handle
+
+
 def Copy(text):
     with clipboard():
         EmptyClipboard()
         # Assuming we are handling ascii
-        data = ctypes.create_string_buffer(text)
-        memory_handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, ctypes.sizeof(data))
-        if not memory_handle:
-            #TODO: use GetLastError() here.
-            raise MemoryError("Allocation failed.")
-
-        with global_memory(memory_handle) as memory:
-            ctypes.memmove(memory, data, ctypes.sizeof(data))
-
-        user32.SetClipboardData(CF_TEXT, memory_handle)
-
-        kernel32.GlobalFree(memory_handle)
+        with global_copy(text) as handle:
+            user32.SetClipboardData(CF_TEXT, handle)
 
 
 def GetClipboardData():
@@ -86,13 +104,15 @@ def GetClipboardData():
         raise ClipboardError("Cannot get data.")
     return hglb
 
+
 def Paste():
     with clipboard():
         hglb = GetClipboardData()
         with global_memory(hglb) as memory:
             return memory.value
 
+
 if __name__ == '__main__':
     print Paste()
-    Copy("what is this?")
+    Copy(Paste() + b"what is this?")
     print Paste()
