@@ -75,7 +75,7 @@ def global_alloc(flags, size):
         # TODO: use GetLastError() here.
         raise MemoryError("Allocation failed.")
 
-    yield handle
+    yield GlobalMemoryHandle(handle)
 
     kernel32.GlobalFree(handle)
 
@@ -98,17 +98,31 @@ def Copy(text):
             user32.SetClipboardData(CF_TEXT, handle)
 
 
-def GetClipboardData():
-    hglb = user32.GetClipboardData(CF_TEXT)
+def GetClipboardData(format_=CF_TEXT):
+    hglb = user32.GetClipboardData(format_)
     if not hglb:
         raise ClipboardError("Cannot get data.")
-    return hglb
+    return GlobalMemoryHandle(hglb)
+
+
+class GlobalMemoryHandle(object):
+    def __init__(self, handle):
+        self._handle = handle
+
+    @property
+    def handle(self):
+        return self._handle
+
+    def __enter__(self):
+        return global_lock(self._handle)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        global_unlock(self._handle)
 
 
 def Paste():
     with clipboard():
-        hglb = GetClipboardData()
-        with global_memory(hglb) as memory:
+        with GetClipboardData(CF_TEXT) as memory:
             return memory.value
 
 
