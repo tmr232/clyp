@@ -1,6 +1,7 @@
 import contextlib
 import ctypes
 from ctypes import wintypes
+import operator
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -29,6 +30,7 @@ def null_errcheck(result, func, args):
         raise ctypes.WinError()
     return args
 
+
 def errcheck_expect_null(result, func, args):
     if result:
         raise ctypes.WinError()
@@ -40,52 +42,120 @@ def lasterror_errcheck(result, func, args):
         raise ctypes.WinError()
 
 
-prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND)
-paramflags = ((1, "hWndNewOwner"), )
-OpenClipboard = prototype(("OpenClipboard", user32), paramflags)
-OpenClipboard.errcheck = bool_errcheck
+def wrap_function(name, library, restype, params, errcheck=None):
+    prototype = ctypes.WINFUNCTYPE(restype, *(param.type for param in params))
+    paramflags = tuple(param.paramflags for param in params)
+    wrapper = prototype((name, library), paramflags)
+    wrapper.errcheck = errcheck
 
-prototype = ctypes.WINFUNCTYPE(wintypes.BOOL)
-CloseClipboard = prototype(("CloseClipboard", user32))
-CloseClipboard.errcheck = bool_errcheck
+    return wrapper
 
-prototype = ctypes.WINFUNCTYPE(wintypes.BOOL)
-EmptyClipboard = prototype(("EmptyClipboard", user32))
 
-prototype = ctypes.WINFUNCTYPE(wintypes.HANDLE, wintypes.UINT, wintypes.HANDLE)
-paramflags = (1, "uFormat"), (1, "hMem")
-SetClipboardData = prototype(("SetClipboardData", user32), paramflags)
-SetClipboardData.errcheck = null_errcheck
+class Parameter(object):
+    def __init__(self, name, type_, default=None, out=False):
+        self._name = name
+        self._type = type_
+        self._out = out
+        self._default = default
 
-prototype = ctypes.WINFUNCTYPE(wintypes.LPVOID, wintypes.HGLOBAL)
-paramflags = ((1, "hMem"), )
-GlobalLock = prototype(("GlobalLock", kernel32), paramflags)
-def errcheck(result, func, args):
+    @property
+    def flag(self):
+        if self._out:
+            return 2
+        else:
+            return 1
+
+    @property
+    def type(self):
+        return self._type
+
+    @property
+    def paramflags(self):
+        paramflags = (self.flag, self._name, self._default)
+        if self._default is None:
+            return paramflags[:-1]
+        else:
+            return paramflags
+
+
+OpenClipboard = wrap_function(name="OpenClipboard",
+                              library=user32,
+                              restype=wintypes.BOOL,
+                              params=[
+                                  Parameter("hWndNewOwner", wintypes.HWND, default=0)
+                              ],
+                              errcheck=bool_errcheck)
+
+CloseClipboard = wrap_function(name="CloseClipboard",
+                               library=user32,
+                               restype=wintypes.BOOL,
+                               params=[],
+                               errcheck=bool_errcheck)
+
+EmptyClipboard = wrap_function(name="EmptyClipboard",
+                               library=user32,
+                               restype=wintypes.BOOL,
+                               params=[],
+                               errcheck=bool_errcheck)
+
+SetClipboardData = wrap_function(name="SetClipboardData",
+                                 library=user32,
+                                 restype=wintypes.BOOL,
+                                 params=[
+                                     Parameter("uFormat", wintypes.UINT),
+                                     Parameter("hMem", wintypes.HANDLE)
+                                 ],
+                                 errcheck=null_errcheck)
+
+GetClipboardData_ = wrap_function(name="GetClipboardData",
+                                  library=user32,
+                                  restype=wintypes.HGLOBAL,
+                                  params=[
+                                      Parameter("uFormat", wintypes.UINT, default=CF_TEXT)
+                                  ],
+                                  errcheck=null_errcheck)
+
+
+def globallock_errcheck(result, func, args):
     if not result:
         raise ctypes.WinError()
     return ctypes.c_char_p(result)
-GlobalLock.errcheck = errcheck
-
-prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HGLOBAL)
-paramflags = ((1, "hMem"), )
-GlobalUnlock = prototype(("GlobalUnlock", kernel32), paramflags)
-GlobalUnlock.errcheck = lasterror_errcheck
-
-prototype = ctypes.WINFUNCTYPE(wintypes.HGLOBAL, wintypes.UINT, wintypes.UINT)
-paramflags = (1, "uFlags", GMEM_MOVEABLE), (1, "dwBytes")
-GlobalAlloc = prototype(("GlobalAlloc", kernel32), paramflags)
-GlobalAlloc.errcheck = null_errcheck
-
-prototype = ctypes.WINFUNCTYPE(wintypes.HGLOBAL, wintypes.HGLOBAL)
-paramflags = ((1, "hMem"), )
-GlobalFree = prototype(("GlobalFree", kernel32), paramflags)
-GlobalFree.errcheck = errcheck_expect_null
 
 
-prototype = ctypes.WINFUNCTYPE(wintypes.HGLOBAL, wintypes.UINT)
-paramflags = ((1, "uFormat", CF_TEXT), )
-GetClipboardData_ = prototype(("GetClipboardData", user32), paramflags)
-GetClipboardData_.errcheck = null_errcheck
+GlobalLock = wrap_function(name="GlobalLock",
+                           library=kernel32,
+                           restype=wintypes.LPVOID,
+                           params=[
+                               Parameter("hMem", wintypes.HGLOBAL)
+                           ],
+                           errcheck=globallock_errcheck)
+
+GlobalUnlock = wrap_function(name="GlobalUnlock",
+                             library=kernel32,
+                             restype=wintypes.BOOL,
+                             params=[
+                                 Parameter("hMem", wintypes.HGLOBAL)
+                             ],
+                             errcheck=lasterror_errcheck)
+
+GlobalAlloc = wrap_function(name="GlobalAlloc",
+                            library=kernel32,
+                            restype=wintypes.HGLOBAL,
+                            params=[
+                                Parameter("uFlags", wintypes.UINT, default=GMEM_MOVEABLE),
+                                Parameter("dwBytes", wintypes.UINT)
+                            ],
+                            errcheck=null_errcheck)
+
+GlobalFree = wrap_function(name="GlobalFree",
+                           library=kernel32,
+                           restype=wintypes.HGLOBAL,
+                           params=[
+                               Parameter("hMem", wintypes.HGLOBAL)
+                           ],
+                           errcheck=errcheck_expect_null)
+
+
 # TODO: add a context manager that also allocates and frees the global memory.
 
 
